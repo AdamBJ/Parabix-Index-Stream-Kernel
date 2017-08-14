@@ -6,7 +6,7 @@
 #define IDX_STREAM_H
 
 #include "kernel.h"  // for KernelBuilder
-namespace IDISA { class IDISA_Builder; }  // lines 14-14 //TODO remove this?
+namespace IDISA { class IDISA_Builder; }  // lines 14-14 TODO remove this?
 namespace llvm { class Value; } //TODO what are these for?
 
 namespace kernel {

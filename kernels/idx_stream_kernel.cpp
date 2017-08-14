@@ -7,111 +7,118 @@
 #include <kernels/kernel_builder.h>  // for IDISA_Builder
 #include <llvm/Support/raw_ostream.h>
 #include <iostream>
-//TODO getting ...11, first 3 bits are meaningless. need 11000, or 00011000. Might just be issue with stdout_kernel
 
 using namespace llvm;
 namespace kernel {
-	void IdxStreamKernel::generateFinalBlockMethod(const std::unique_ptr<KernelBuilder> & iBuilder, Value * remainingItems) {
+	void IdxStreamKernel::generateFinalBlockMethod(const std::unique_ptr<KernelBuilder> & kb, Value * remainingItems) {
 	    for (unsigned j = 0; j < mStreamCount; ++j) {	
-			iBuilder->CallPrintInt("numb rem items in final: ", remainingItems);
-			// call generateDoBlockMethod
-			CreateDoBlockMethodCall(iBuilder);
+	//kb->CallPrintInt("numb remaining items in final: ", remainingItems);
+			// Call generateDoBlockMethod
+			CreateDoBlockMethodCall(kb);
 	
-			// write the idx pack to output
-			Type * iPackTy = iBuilder->getIntNTy(mPackSize);
-			Type * iPackPtrTy = iPackTy->getPointerTo();
-			Value * idxBitsAccumulator = iBuilder->getScalarField("idxBitsAccumulator" + std::to_string(j));
-	
-			writeIdxStrmToOutput(iPackPtrTy, idxBitsAccumulator, iBuilder, j);
+			// Write the final idx pack to output, regardless of whether it's full or not
+			Type * iPackTy = kb->getIntNTy(mPackSize);
+			Type * iPackTyPtr = iPackTy->getPointerTo();
+			Value * idxBitsAccumulator = kb->getScalarField("idxBitsAccumulator" + std::to_string(j));
+			writeIdxStrmToOutput(iPackTyPtr, idxBitsAccumulator, kb, j);
 
-			iBuilder->setScalarField("idxBitsAccumulator" + std::to_string(j), iBuilder->getSize(0));
-			iBuilder->setScalarField("numIdxBits" + std::to_string(j), iBuilder->getSize(0));
+			kb->setScalarField("idxBitsAccumulator" + std::to_string(j), kb->getSize(0));
+			kb->setScalarField("numAccumulatedIdxBits" + std::to_string(j), kb->getSize(0));
 		}
 	}
 
-	void IdxStreamKernel::generateDoBlockMethod(const std::unique_ptr<KernelBuilder> & iBuilder) {
+	void IdxStreamKernel::generateDoBlockMethod(const std::unique_ptr<KernelBuilder> & kb) {
 		for (unsigned j = 0; j < mStreamCount; ++j) {		
-			BasicBlock * entryBlock = iBuilder->GetInsertBlock();   
-			BasicBlock * writeToOutputBlock = iBuilder->CreateBasicBlock("writeToOutputBlock");
-			BasicBlock * returnBlock = iBuilder->CreateBasicBlock("returnBlock");
+			BasicBlock * entryBlock = kb->GetInsertBlock();   
+			BasicBlock * writeToOutputBlock = kb->CreateBasicBlock("writeToOutputBlock");
+			BasicBlock * returnBlock = kb->CreateBasicBlock("returnBlock");
 	
-			Type * iPackTy = iBuilder->getIntNTy(mPackSize);
-			Type * iPackPtrTy = iPackTy->getPointerTo();		
-			unsigned const blockWidth = iBuilder->getBitBlockWidth();
+			Type * iPackTy = kb->getIntNTy(mPackSize);
+			Type * iPackTyPtr = iPackTy->getPointerTo();		
+			unsigned const blockWidth = kb->getBitBlockWidth();
 			unsigned const packsPerBlock = blockWidth/mPackSize;
-			Value * idxBitsAccumulator = iBuilder->getScalarField("idxBitsAccumulator" + std::to_string(j));
-			Value * numIdxBits = iBuilder->getScalarField("numIdxBits" + std::to_string(j));
-			iBuilder->CallPrintInt("numIdxBits_phi", numIdxBits); //TODO remove
+			Value * idxBitsAccumulator = kb->getScalarField("idxBitsAccumulator" + std::to_string(j));
+			Value * numAccumulatedIdxBits = kb->getScalarField("numAccumulatedIdxBits" + std::to_string(j));
+	//kb->CallPrintInt("numAccumulatedIdxBits_phi", numAccumulatedIdxBits); //TODO remove
 	
 			// Determine which mPackSize segments of this block contain at least 
-			// a single 1 bit
-			Value * blk = iBuilder->loadInputStreamBlock("bitStreams", iBuilder->getInt32(j));
-			Value * hasBit = iBuilder->simd_ugt(mPackSize, blk, iBuilder->allZeroes()); 
-			Value * blkIdxBits = iBuilder->CreateZExtOrTrunc(iBuilder->hsimd_signmask(mPackSize, hasBit), 
+			// a single set bit
+			Value * blk = kb->loadInputStreamBlock("bitStreams", kb->getInt32(j));
+		kb->CallPrintRegister("blk", blk); //TODO remove
+			
+			Value * hasBit = kb->simd_ugt(mPackSize, blk, kb->allZeroes()); 
+			Value * blkIdxBits = kb->CreateZExtOrTrunc(kb->hsimd_signmask(mPackSize, hasBit), 
 				iPackTy); 
-					
+	//kb->CallPrintInt("blkIdxBits", blkIdxBits); //TODO remove
+				
 			// We've generated blockWidth/mPackSize index bits (one for each mPackSized 
-			// segment of the current block). Add these bits to idxBitsAccumulator stream.
+			// segment of the current block). Append these bits to idxBitsAccumulator stream.
 			// Remember that streams should grow from right to left -- the more recent the addition
 			// to the stream, the farther left in the stream it should be. Final block blkIdxBits 
 			// should be leftmost bits of idxBitsAccumulator		
-			Value * relBlockNo = iBuilder->CreateUDiv(numIdxBits, iBuilder->getSize(packsPerBlock));
-			Value * shiftAmount = iBuilder->CreateMul(relBlockNo, iBuilder->getSize(packsPerBlock));
-			idxBitsAccumulator = iBuilder->CreateOr(idxBitsAccumulator, iBuilder->CreateShl(blkIdxBits, shiftAmount));			
-			numIdxBits = iBuilder->CreateAdd(numIdxBits, iBuilder->getSize(packsPerBlock));
+			// Value * relBlockNo = kb->CreateUDiv(numAccumulatedIdxBits, kb->getSize(packsPerBlock));
+			////kb->CallPrintInt("relBlockNo", relBlockNo); //TODO remove
+			
+			// Value * shiftAmount = kb->CreateMul(relBlockNo, kb->getSize(packsPerBlock));
+			//kb->CallPrintInt("shiftAmount", shiftAmount); //TODO remove
+			//kb->CallPrintInt("numAccumulatedIdxBits", numAccumulatedIdxBits); //TODO remove
+			
+			// Preserve the existing bits in the accumulator by shifting the new index bits left before ORing them into the accumulator
+			idxBitsAccumulator = kb->CreateOr(idxBitsAccumulator, kb->CreateShl(blkIdxBits, numAccumulatedIdxBits)); // shiftAmount			
+			numAccumulatedIdxBits = kb->CreateAdd(numAccumulatedIdxBits, kb->getSize(packsPerBlock));
 
-			Value * haveFullPack = iBuilder->CreateICmpEQ(numIdxBits, iBuilder->getSize(mPackSize));
-			iBuilder->CreateCondBr(haveFullPack, writeToOutputBlock, returnBlock);
+			// If we've accumulated a full pack of index bits (mPackSize bits), write the index bits to output
+			Value * haveFullPack = kb->CreateICmpEQ(numAccumulatedIdxBits, kb->getSize(mPackSize));
+			kb->CreateCondBr(haveFullPack, writeToOutputBlock, returnBlock);
 		
-			iBuilder->SetInsertPoint(writeToOutputBlock);
-			writeIdxStrmToOutput(iPackPtrTy, idxBitsAccumulator, iBuilder, j);
-			Value * resetIdxBits = iBuilder->getSize(0);
-			Value * resetNumIdxBits = iBuilder->getSize(0);		
-			iBuilder->CreateBr(returnBlock);
+			kb->SetInsertPoint(writeToOutputBlock);
+			writeIdxStrmToOutput(iPackTyPtr, idxBitsAccumulator, kb, j);
+			Value * resetIdxBits = kb->getSize(0);
+			Value * resetnumAccumulatedIdxBits = kb->getSize(0);		
+			kb->CreateBr(returnBlock);
 				
-			iBuilder->SetInsertPoint(returnBlock);		
-			PHINode * idxBitsAccumulator_phi = iBuilder->CreatePHI(iBuilder->getSizeTy(), 2);
-			PHINode * numIdxBits_phi = iBuilder->CreatePHI(iBuilder->getSizeTy(), 2);
+			kb->SetInsertPoint(returnBlock);		
+			PHINode * idxBitsAccumulator_phi = kb->CreatePHI(kb->getSizeTy(), 2);
+			PHINode * numAccumulatedIdxBits_phi = kb->CreatePHI(kb->getSizeTy(), 2);
 			idxBitsAccumulator_phi->addIncoming(resetIdxBits, writeToOutputBlock);
-			numIdxBits_phi->addIncoming(resetNumIdxBits, writeToOutputBlock);
+			numAccumulatedIdxBits_phi->addIncoming(resetnumAccumulatedIdxBits, writeToOutputBlock);
 			idxBitsAccumulator_phi->addIncoming(idxBitsAccumulator, entryBlock);
-			numIdxBits_phi->addIncoming(numIdxBits, entryBlock);
+			numAccumulatedIdxBits_phi->addIncoming(numAccumulatedIdxBits, entryBlock);
+			kb->setScalarField("idxBitsAccumulator" + std::to_string(j), idxBitsAccumulator_phi);
+			kb->setScalarField("numAccumulatedIdxBits" + std::to_string(j), numAccumulatedIdxBits_phi);
 			
-			iBuilder->CallPrintInt("idxBitsAccumulator_phi", idxBitsAccumulator_phi); //TODO remove
-			iBuilder->CallPrintInt("numIdxBits_phi", numIdxBits_phi); //TODO remove
-			
-			iBuilder->setScalarField("idxBitsAccumulator" + std::to_string(j), idxBitsAccumulator_phi);
-			iBuilder->setScalarField("numIdxBits" + std::to_string(j), numIdxBits_phi);
+	//kb->CallPrintInt("idxBitsAccumulator_phi", idxBitsAccumulator_phi); //TODO remove
+	//kb->CallPrintInt("numAccumulatedIdxBits_phi", numAccumulatedIdxBits_phi); //TODO remove
 	    }
 	}
 
-	IdxStreamKernel::IdxStreamKernel(const std::unique_ptr<kernel::KernelBuilder> & iBuilder, unsigned int packSize, unsigned int numInputStreams)
+	IdxStreamKernel::IdxStreamKernel(const std::unique_ptr<kernel::KernelBuilder> & kb, unsigned int packSize, unsigned int numInputStreams)
 	: BlockOrientedKernel("IdxStreamSet"
-	, {Binding{iBuilder->getStreamSetTy(numInputStreams, 1), "bitStreams"}}
-	// all input streams in IdxStreamSet have same num blocks to process, same fw
-	, {Binding{iBuilder->getStreamSetTy(numInputStreams, 1), "idxStreams", FixedRatio(1, packSize)}} 
+	, {Binding{kb->getStreamSetTy(numInputStreams, 1), "bitStreams"}}
+	// All input streams in IdxStreamSet have same num blocks to process, same fw
+	, {Binding{kb->getStreamSetTy(numInputStreams, 1), "idxStreams", FixedRatio(1, packSize)}} 
 	, {}
 	, {}
-	, {/*{Binding{iBuilder->getSizeTy(), "idxBitsAccumulator0"}, Binding{iBuilder->getSizeTy(), "numIdxBits0"}, Binding{iBuilder->getSizeTy(), "numberOfWrites0"}}*/})
+	, {})
 	, mPackSize(packSize)
 	, mStreamCount(numInputStreams) {
         // TODO assert packsize%blocksize == 0?
         for (unsigned i = 0; i < mStreamCount; i++) {
-        	mInternalScalars.emplace_back(iBuilder->getSizeTy(), "idxBitsAccumulator" + std::to_string(i));
-        	mInternalScalars.emplace_back(iBuilder->getSizeTy(), "numIdxBits" + std::to_string(i));
-        	mInternalScalars.emplace_back(iBuilder->getSizeTy(), "numberOfWrites" + std::to_string(i));
+        	mInternalScalars.emplace_back(kb->getSizeTy(), "idxBitsAccumulator" + std::to_string(i));
+        	mInternalScalars.emplace_back(kb->getSizeTy(), "numAccumulatedIdxBits" + std::to_string(i));
+        	mInternalScalars.emplace_back(kb->getSizeTy(), "numberOfWrites" + std::to_string(i));
         }
 	}
 
-    void IdxStreamKernel::writeIdxStrmToOutput(Type * iPackPtrTy, Value * idxBitsAccumulator, const std::unique_ptr<KernelBuilder> & iBuilder,
+    void IdxStreamKernel::writeIdxStrmToOutput(Type * iPackTyPtr, Value * idxBitsAccumulator, const std::unique_ptr<KernelBuilder> & kb,
     	unsigned streamNum) {
-        Value * idxStreamBlockPtr = iBuilder->CreateBitCast(iBuilder->getOutputStreamBlockPtr("idxStreams",
-	        iBuilder->getInt32(streamNum)), iPackPtrTy); //TODO member variable rather than calling each time?		
-        Value * numberWrites = iBuilder->getScalarField("numberOfWrites" + std::to_string(streamNum));
-        // field width of idxStream is 1 bit, but we've casted idxSteamBlockPtr to iPackPtrTy (usually 64 bit ptr). Adding 1 to offset  of idxStreamBlockPtr adds 64bits, not 1 bit!!
-        Value * idxStreamOutputPtr =  iBuilder->CreateGEP(idxStreamBlockPtr, numberWrites); 
-        iBuilder->setScalarField("numberOfWrites" + std::to_string(streamNum), iBuilder->CreateAdd(numberWrites, iBuilder->getSize(1)));
-        iBuilder->CreateStore(idxBitsAccumulator, idxStreamOutputPtr); //TODO storing a 64-bit quantity here... that first 5 bits are 0. That's why we have 0 in the output?
-        iBuilder->CallPrintInt("just wrote to output: ", idxBitsAccumulator); //TODO remove
+		Value * idxStreamBlockPtr = kb->CreateBitCast(kb->getOutputStreamBlockPtr("idxStreams", kb->getInt32(streamNum)),
+			iPackTyPtr);
+        Value * numberWrites = kb->getScalarField("numberOfWrites" + std::to_string(streamNum));
+        // field width of idxStream is 1 bit, but we've casted idxSteamBlockPtr to iPackTyPtr (usually 64 bit ptr). Adding 1 to offset  of idxStreamBlockPtr adds 64bits, not 1 bit!
+        Value * idxStreamOutputPtr =  kb->CreateGEP(idxStreamBlockPtr, numberWrites); 
+        kb->setScalarField("numberOfWrites" + std::to_string(streamNum), kb->CreateAdd(numberWrites, kb->getSize(1)));
+        kb->CreateStore(idxBitsAccumulator, idxStreamOutputPtr); //TODO storing a 64-bit quantity here... that first 5 bits are 0. That's why we have 0 in the output?
+		//kb->CallPrintInt("just wrote to output: ", idxBitsAccumulator); //TODO remove
     }
 }

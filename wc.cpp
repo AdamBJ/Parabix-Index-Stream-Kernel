@@ -10,8 +10,6 @@
 #include <toolchain/toolchain.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Module.h>
-// #include <llvm/ExecutionEngine/ExecutionEngine.h>
-// #include <llvm/Linker/Linker.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/raw_ostream.h>
 #include <cc/cc_compiler.h>
@@ -122,7 +120,7 @@ void WordCountKernel::generatePabloMethod() {
         PabloAST * LF = ccc.compileCC(re::makeCC(0x0A));
                 PabloAST * pdep_ms = ccc.compileCC(re::makeCC(0x61)); // 'a'
 
-        pb.createAssign(pb.createExtract(outStrms, 1), pdep_ms);
+        //pb.createAssign(pb.createExtract(outStrms, 1), pdep_ms);
         
         pb.createAssign(lc, pb.createCount(LF));
     }
@@ -174,14 +172,14 @@ void wcPipelineGen(ParabixDriver & pxDriver) {
         make_unique<SourceBuffer>(iBuilder, iBuilder->getStreamSetTy(1, 8)));
     StreamSetBuffer * const BasisBits = pxDriver.addBuffer(
         make_unique<CircularBuffer>(iBuilder, iBuilder->getStreamSetTy(8, 1), segmentSize * bufferSegments));
-    StreamSetBuffer * const WCMarkerStreams = pxDriver.addBuffer(
-        make_unique<CircularBuffer>(iBuilder, iBuilder->getStreamSetTy(2, 1), segmentSize * bufferSegments));
-    StreamSetBuffer * const IdxStreams = pxDriver.addBuffer(
-        make_unique<CircularBuffer>(iBuilder, iBuilder->getStreamSetTy(2, 1), segmentSize * bufferSegments));
     // StreamSetBuffer * const WCMarkerStreams = pxDriver.addBuffer(
-    //    make_unique<CircularBuffer>(iBuilder, iBuilder->getStreamSetTy(1, 1), segmentSize * bufferSegments));
+    //     make_unique<CircularBuffer>(iBuilder, iBuilder->getStreamSetTy(2, 1), segmentSize * bufferSegments));
     // StreamSetBuffer * const IdxStreams = pxDriver.addBuffer(
-    //    make_unique<CircularBuffer>(iBuilder, iBuilder->getStreamSetTy(1, 1), segmentSize * bufferSegments));
+    //     make_unique<CircularBuffer>(iBuilder, iBuilder->getStreamSetTy(2, 1), segmentSize * bufferSegments));
+    StreamSetBuffer * const WCMarkerStreams = pxDriver.addBuffer(
+       make_unique<CircularBuffer>(iBuilder, iBuilder->getStreamSetTy(1, 1), segmentSize * bufferSegments));
+    StreamSetBuffer * const IdxStreams = pxDriver.addBuffer(
+       make_unique<CircularBuffer>(iBuilder, iBuilder->getStreamSetTy(1, 1), segmentSize * bufferSegments));
      StreamSetBuffer * const SelectedStream = pxDriver.addBuffer(
         make_unique<CircularBuffer>(iBuilder, iBuilder->getStreamSetTy(1, 1), segmentSize * bufferSegments));
      StreamSetBuffer * const PrintableByteStream = pxDriver.addBuffer(
@@ -197,11 +195,11 @@ void wcPipelineGen(ParabixDriver & pxDriver) {
     Kernel * wck = pxDriver.addKernelInstance(make_unique<WordCountKernel>(iBuilder));
     pxDriver.makeKernelCall(wck, {BasisBits}, {WCMarkerStreams});
 
-    Kernel * isk = pxDriver.addKernelInstance(make_unique<IdxStreamKernel>(iBuilder, 64, 2/*1*/));
+    Kernel * isk = pxDriver.addKernelInstance(make_unique<IdxStreamKernel>(iBuilder, 64, 1/*2*/));
     pxDriver.makeKernelCall(isk, {WCMarkerStreams}, {IdxStreams});
     
-     Kernel * ssk = pxDriver.addKernelInstance(make_unique<SelectStream>(iBuilder, 2, 0));
-     pxDriver.makeKernelCall(ssk, {IdxStreams}, {SelectedStream});
+     Kernel * ssk = pxDriver.addKernelInstance(make_unique<SelectStream>(iBuilder, 1, 0));
+     pxDriver.makeKernelCall(ssk, {WCMarkerStreams}, {SelectedStream});
     
      Kernel * pb = pxDriver.addKernelInstance(make_unique<PrintableBits>(iBuilder));
      pxDriver.makeKernelCall(pb, {SelectedStream}, {PrintableByteStream});
